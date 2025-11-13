@@ -124,12 +124,24 @@ app.get('/api/debug', async (req, res) => {
     const dbState = mongoose.connection.readyState;
     const stateNames = ['disconnected', 'connected', 'connecting', 'disconnecting'];
     
+    console.log('Debug endpoint called, current db state:', dbState);
+    
     let universityCount = 0;
     let sampleUniversity = null;
+    let connectionTest = false;
+    
+    // Test connection
+    console.log('Testing database connection...');
+    connectionTest = await testDatabaseConnection();
     
     if (dbState === 1) {
-      universityCount = await University.countDocuments();
-      sampleUniversity = await University.findOne().lean();
+      try {
+        universityCount = await University.countDocuments();
+        sampleUniversity = await University.findOne().lean();
+        console.log(`Found ${universityCount} universities in database`);
+      } catch (queryError) {
+        console.error('Query error:', queryError.message);
+      }
     }
     
     res.json({
@@ -137,7 +149,8 @@ app.get('/api/debug', async (req, res) => {
       database: {
         state: stateNames[dbState] || 'unknown',
         stateCode: dbState,
-        connected: dbState === 1
+        connected: dbState === 1,
+        connectionTest: connectionTest
       },
       collections: {
         universityCount,
@@ -146,15 +159,67 @@ app.get('/api/debug', async (req, res) => {
           name: sampleUniversity.name,
           shortName: sampleUniversity.shortName
         } : null
+      },
+      environment: {
+        mongoUriExists: !!process.env.MONGO_URI,
+        nodeEnv: process.env.NODE_ENV
       }
     });
   } catch (err) {
+    console.error('Debug endpoint error:', err);
     res.status(500).json({
       success: false,
       error: err.message,
       database: {
         state: 'error',
         connected: false
+      }
+    });
+  }
+});
+
+app.get('/api/test-db', async (req, res) => {
+  try {
+    console.log('Manual database connection test...');
+    const connected = await connectToDatabase();
+    
+    if (connected) {
+      // Try to perform actual operations
+      const dbStats = await mongoose.connection.db.stats();
+      const collections = await mongoose.connection.db.listCollections().toArray();
+      
+      res.json({
+        success: true,
+        message: 'Database connection successful',
+        details: {
+          connected: true,
+          dbName: mongoose.connection.db.databaseName,
+          collections: collections.map(c => c.name),
+          stats: {
+            collections: dbStats.collections,
+            objects: dbStats.objects,
+            dataSize: dbStats.dataSize
+          }
+        }
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'Database connection failed',
+        details: {
+          connected: false,
+          readyState: mongoose.connection.readyState
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Test DB error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      details: {
+        connected: false,
+        readyState: mongoose.connection.readyState
       }
     });
   }
@@ -621,8 +686,7 @@ if (!MONGO) {
 
 // Database connection for serverless
 let isConnected = false;
-let connectionAttempts = 0;
-const MAX_CONNECTION_ATTEMPTS = 3;
+let mongoose_connection = null;
 
 const connectToDatabase = async () => {
   if (isConnected && mongoose.connection.readyState === 1) {
@@ -634,35 +698,58 @@ const connectToDatabase = async () => {
     return false;
   }
 
-  if (connectionAttempts >= MAX_CONNECTION_ATTEMPTS) {
-    console.error('Max connection attempts reached');
-    return false;
-  }
-
   try {
-    connectionAttempts++;
-    console.log(`Connection attempt ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}`);
+    console.log('Attempting MongoDB connection...');
+    console.log('Connection string preview:', MONGO.substring(0, 50) + '...');
     
-    if (mongoose.connection.readyState === 0) {
-      await mongoose.connect(MONGO, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 15000, // Increased timeout
-        socketTimeoutMS: 45000,
-        bufferCommands: false,
-        bufferMaxEntries: 0,
-        maxPoolSize: 10, // Maintain up to 10 socket connections
-        family: 4 // Use IPv4, skip trying IPv6
-      });
+    // Close any existing connections
+    if (mongoose.connection.readyState !== 0) {
+      await mongoose.disconnect();
     }
+
+    // Connect with Vercel-optimized settings
+    await mongoose.connect(MONGO, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 30000, // Increased timeout for serverless
+      socketTimeoutMS: 75000,
+      connectTimeoutMS: 60000,
+      bufferCommands: false,
+      bufferMaxEntries: 0,
+      maxPoolSize: 5, // Reduced pool size for serverless
+      minPoolSize: 0,
+      maxIdleTimeMS: 30000,
+      family: 4 // Force IPv4
+    });
     
     isConnected = true;
-    connectionAttempts = 0; // Reset on successful connection
-    console.log('Successfully connected to MongoDB');
+    console.log('✅ Successfully connected to MongoDB');
+    console.log('Connection state:', mongoose.connection.readyState);
     return true;
   } catch (error) {
-    console.error(`Database connection error (attempt ${connectionAttempts}):`, error.message);
+    console.error('❌ Database connection error:', {
+      message: error.message,
+      code: error.code,
+      codeName: error.codeName
+    });
     isConnected = false;
+    return false;
+  }
+};
+
+// Test database connectivity
+const testDatabaseConnection = async () => {
+  try {
+    const connected = await connectToDatabase();
+    if (connected) {
+      // Test with a simple query
+      const collections = await mongoose.connection.db.listCollections().toArray();
+      console.log('Available collections:', collections.map(c => c.name));
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('Database test failed:', error.message);
     return false;
   }
 };
@@ -674,12 +761,20 @@ app.use(async (req, res, next) => {
       req.path === '/api/test' || 
       req.path === '/' || 
       req.path === '/api/debug' ||
+      req.path === '/api/test-db' ||
       req.path === '/api/leads') {
     return next();
   }
   
   try {
-    await connectToDatabase();
+    const connected = await connectToDatabase();
+    if (!connected) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Database connection failed',
+        details: 'Unable to connect to MongoDB'
+      });
+    }
     next();
   } catch (error) {
     res.status(500).json({ 
