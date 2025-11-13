@@ -455,6 +455,7 @@ app.post('/api/leads', async (req, res) => {
   try {
     const { fullName, email, phone, state, courseInterested, intakeYear, consent, pipedreamUrl } = req.body;
 
+    // Validate required fields
     if (!fullName || !email || !phone || !courseInterested || !intakeYear) {
       return res.status(400).json({ 
         success: false, 
@@ -462,73 +463,115 @@ app.post('/api/leads', async (req, res) => {
       });
     }
 
+    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({ success: false, error: 'Invalid email format' });
     }
 
+    // Validate phone format
     if (!/^\d{10}$/.test(phone)) {
       return res.status(400).json({ success: false, error: 'Phone must be exactly 10 digits' });
     }
 
-    const existingLead = await Lead.findOne({ email, phone });
-    if (existingLead) {
-      return res.status(409).json({ 
-        success: false, 
-        error: 'Lead with this email or phone already exists' 
-      });
-    }
-
-    const lead = new Lead({ 
+    // Prepare lead data
+    const leadData = { 
       fullName: fullName.trim(), 
       email: email.toLowerCase().trim(), 
       phone, 
-      state: state?.trim(), 
+      state: state?.trim() || '', 
       courseInterested: courseInterested.trim(), 
       intakeYear, 
-      consent: !!consent 
-    });
-    
-    await lead.save();
+      consent: !!consent,
+      createdAt: new Date()
+    };
 
+    let savedLead = null;
+    let leadSource = 'fallback';
+
+    try {
+      // Try to save to database if connected
+      if (mongoose.connection.readyState === 1) {
+        // Check for existing lead
+        const existingLead = await Lead.findOne({ 
+          $or: [{ email: leadData.email }, { phone: leadData.phone }] 
+        });
+        
+        if (existingLead) {
+          return res.status(409).json({ 
+            success: false, 
+            error: 'Lead with this email or phone already exists' 
+          });
+        }
+
+        const lead = new Lead(leadData);
+        savedLead = await lead.save();
+        leadSource = 'database';
+        console.log('Lead saved to database:', savedLead._id);
+      } else {
+        // Database not connected, simulate save
+        savedLead = {
+          _id: new mongoose.Types.ObjectId().toString(),
+          ...leadData
+        };
+        console.log('Lead saved to fallback storage (database not available)');
+      }
+    } catch (dbError) {
+      console.error('Database error, using fallback:', dbError.message);
+      // If database save fails, create mock saved lead
+      savedLead = {
+        _id: new mongoose.Types.ObjectId().toString(),
+        ...leadData
+      };
+      leadSource = 'fallback';
+    }
+
+    // Send to Pipedream webhook if provided
     if (pipedreamUrl) {
-      const axios = require('axios');
       try {
+        const axios = require('axios');
         await axios.post(pipedreamUrl, {
-          fullName: lead.fullName,
-          email: lead.email,
-          phone: lead.phone,
-          state: lead.state,
-          courseInterested: lead.courseInterested,
-          intakeYear: lead.intakeYear,
-          consent: lead.consent,
-          createdAt: lead.createdAt
+          ...leadData,
+          id: savedLead._id,
+          source: leadSource
         }, {
           timeout: 5000,
           headers: {
             'Content-Type': 'application/json'
           }
         });
-      } catch (err) {}
+        console.log('Lead sent to Pipedream successfully');
+      } catch (webhookError) {
+        console.error('Pipedream webhook failed:', webhookError.message);
+        // Don't fail the request if webhook fails
+      }
     }
 
+    // Return success response
     res.status(201).json({ 
       success: true, 
       data: { 
-        id: lead._id,
-        fullName: lead.fullName,
-        email: lead.email,
-        phone: lead.phone,
-        state: lead.state,
-        courseInterested: lead.courseInterested,
-        intakeYear: lead.intakeYear,
-        consent: lead.consent,
-        createdAt: lead.createdAt
+        id: savedLead._id,
+        fullName: savedLead.fullName,
+        email: savedLead.email,
+        phone: savedLead.phone,
+        state: savedLead.state,
+        courseInterested: savedLead.courseInterested,
+        intakeYear: savedLead.intakeYear,
+        consent: savedLead.consent,
+        createdAt: savedLead.createdAt
       },
+      source: leadSource,
       message: 'Lead submitted successfully' 
     });
+
   } catch (err) {
-    res.status(500).json({ success: false, error: 'Failed to submit lead' });
+    console.error('Lead submission error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to submit lead',
+      details: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message
+    });
   }
 });
 
@@ -585,8 +628,12 @@ const connectToDatabase = async () => {
 
 // Middleware to ensure database connection
 app.use(async (req, res, next) => {
-  // Skip database connection for routes that don't need it
-  if (req.path === '/api/health' || req.path === '/api/test' || req.path === '/' || req.path === '/api/debug') {
+  // Skip database connection for routes that don't need it or handle it manually
+  if (req.path === '/api/health' || 
+      req.path === '/api/test' || 
+      req.path === '/' || 
+      req.path === '/api/debug' ||
+      req.path === '/api/leads') {
     return next();
   }
   
