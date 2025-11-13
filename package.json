@@ -2,8 +2,12 @@
   "name": "uni-landing-backend",
   "version": "1.0.0",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "start": "node server.js",
+    "build": "echo 'No build step required'",
     "dev": "nodemon server.js",
     "seed": "node seed.js"
   },
