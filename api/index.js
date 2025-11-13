@@ -27,6 +27,47 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/debug', async (req, res) => {
+  try {
+    const dbState = mongoose.connection.readyState;
+    const stateNames = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    
+    let universityCount = 0;
+    let sampleUniversity = null;
+    
+    if (dbState === 1) {
+      universityCount = await University.countDocuments();
+      sampleUniversity = await University.findOne().lean();
+    }
+    
+    res.json({
+      success: true,
+      database: {
+        state: stateNames[dbState] || 'unknown',
+        stateCode: dbState,
+        connected: dbState === 1
+      },
+      collections: {
+        universityCount,
+        sampleUniversity: sampleUniversity ? {
+          id: sampleUniversity._id,
+          name: sampleUniversity.name,
+          shortName: sampleUniversity.shortName
+        } : null
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      database: {
+        state: 'error',
+        connected: false
+      }
+    });
+  }
+});
+
 app.get('/', (req, res) => {
   res.json({ 
     success: true, 
@@ -43,6 +84,16 @@ app.get('/', (req, res) => {
 app.get('/api/universities', async (req, res) => {
   try {
     const { page = 1, limit = 10, search } = req.query;
+    
+    // Check if database is connected
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Database not connected',
+        connectionState: mongoose.connection.readyState 
+      });
+    }
+    
     const query = search ? { 
       $or: [
         { name: { $regex: search, $options: 'i' } },
@@ -52,12 +103,19 @@ app.get('/api/universities', async (req, res) => {
     } : {};
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Check if collection exists and has data
+    const count = await University.countDocuments();
+    console.log(`Total universities in database: ${count}`);
+    
     const unis = await University.find(query, 'name shortName city')
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
     
     const total = await University.countDocuments(query);
+    
+    console.log(`Found ${unis.length} universities, total: ${total}`);
     
     res.json({ 
       success: true, 
@@ -70,7 +128,12 @@ app.get('/api/universities', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: 'Failed to fetch universities' });
+    console.error('Universities API Error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch universities',
+      details: process.env.NODE_ENV === 'production' ? 'Check logs' : err.message
+    });
   }
 });
 
