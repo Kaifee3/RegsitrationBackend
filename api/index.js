@@ -178,49 +178,53 @@ app.get('/api/debug', async (req, res) => {
   }
 });
 
-app.get('/api/test-db', async (req, res) => {
+app.get('/api/mongo-test', async (req, res) => {
   try {
-    console.log('Manual database connection test...');
-    const connected = await connectToDatabase();
+    console.log('Direct MongoDB test starting...');
     
-    if (connected) {
-      // Try to perform actual operations
-      const dbStats = await mongoose.connection.db.stats();
-      const collections = await mongoose.connection.db.listCollections().toArray();
-      
-      res.json({
-        success: true,
-        message: 'Database connection successful',
-        details: {
-          connected: true,
-          dbName: mongoose.connection.db.databaseName,
-          collections: collections.map(c => c.name),
-          stats: {
-            collections: dbStats.collections,
-            objects: dbStats.objects,
-            dataSize: dbStats.dataSize
-          }
-        }
-      });
-    } else {
-      res.json({
+    if (!process.env.MONGO_URI) {
+      return res.json({
         success: false,
-        message: 'Database connection failed',
-        details: {
-          connected: false,
-          readyState: mongoose.connection.readyState
-        }
+        error: 'MONGO_URI not found',
+        env: Object.keys(process.env).filter(key => key.includes('MONGO'))
       });
     }
+
+    // Test connection with minimal settings
+    const testMongoose = require('mongoose');
+    
+    // Create new connection
+    const connection = await testMongoose.createConnection(process.env.MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 0,
+      bufferCommands: false,
+      bufferMaxEntries: 0
+    });
+
+    // Test the connection
+    await connection.db.admin().ping();
+    const dbName = connection.db.databaseName;
+    
+    // Close test connection
+    await connection.close();
+    
+    res.json({
+      success: true,
+      message: 'MongoDB connection successful!',
+      database: dbName,
+      timestamp: new Date().toISOString()
+    });
+    
   } catch (error) {
-    console.error('Test DB error:', error);
-    res.status(500).json({
+    console.error('MongoDB test error:', error);
+    res.json({
       success: false,
       error: error.message,
-      details: {
-        connected: false,
-        readyState: mongoose.connection.readyState
-      }
+      errorCode: error.code,
+      errorName: error.name,
+      mongoUri: process.env.MONGO_URI ? 'EXISTS' : 'MISSING'
     });
   }
 });
@@ -761,7 +765,7 @@ app.use(async (req, res, next) => {
       req.path === '/api/test' || 
       req.path === '/' || 
       req.path === '/api/debug' ||
-      req.path === '/api/test-db' ||
+      req.path === '/api/mongo-test' ||
       req.path === '/api/leads') {
     return next();
   }
