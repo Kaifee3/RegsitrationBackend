@@ -190,30 +190,38 @@ app.get('/api/mongo-test', async (req, res) => {
       });
     }
 
-    // Test connection with minimal settings
-    const testMongoose = require('mongoose');
+    console.log('MONGO_URI exists, attempting connection...');
     
-    // Create new connection
-    const connection = await testMongoose.createConnection(process.env.MONGO_URI, {
+    // Test connection with mongoose directly
+    const testConnection = await mongoose.createConnection(process.env.MONGO_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 10000,
+      serverSelectionTimeoutMS: 15000,
       socketTimeoutMS: 0,
       bufferCommands: false,
       bufferMaxEntries: 0
     });
 
-    // Test the connection
-    await connection.db.admin().ping();
-    const dbName = connection.db.databaseName;
+    // Test the connection with a ping
+    console.log('Testing connection with ping...');
+    await testConnection.db.admin().ping();
+    
+    const dbName = testConnection.db.databaseName;
+    console.log('Connected to database:', dbName);
+    
+    // Try to list collections
+    const collections = await testConnection.db.listCollections().toArray();
+    console.log('Collections found:', collections.length);
     
     // Close test connection
-    await connection.close();
+    await testConnection.close();
+    console.log('Test connection closed');
     
     res.json({
       success: true,
       message: 'MongoDB connection successful!',
       database: dbName,
+      collections: collections.map(c => c.name),
       timestamp: new Date().toISOString()
     });
     
@@ -222,9 +230,9 @@ app.get('/api/mongo-test', async (req, res) => {
     res.json({
       success: false,
       error: error.message,
-      errorCode: error.code,
-      errorName: error.name,
-      mongoUri: process.env.MONGO_URI ? 'EXISTS' : 'MISSING'
+      errorCode: error.code || 'unknown',
+      errorName: error.name || 'unknown',
+      mongoUriConfigured: !!process.env.MONGO_URI
     });
   }
 });
@@ -694,6 +702,7 @@ let mongoose_connection = null;
 
 const connectToDatabase = async () => {
   if (isConnected && mongoose.connection.readyState === 1) {
+    console.log('Already connected to MongoDB');
     return true;
   }
 
@@ -703,39 +712,55 @@ const connectToDatabase = async () => {
   }
 
   try {
-    console.log('Attempting MongoDB connection...');
-    console.log('Connection string preview:', MONGO.substring(0, 50) + '...');
+    console.log('🔄 Attempting MongoDB connection...');
+    console.log('Connection string length:', MONGO.length);
     
-    // Close any existing connections
+    // Ensure we start with a clean slate
     if (mongoose.connection.readyState !== 0) {
+      console.log('Disconnecting existing connection...');
       await mongoose.disconnect();
+      // Wait a bit for clean disconnect
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
-    // Connect with Vercel-optimized settings
-    await mongoose.connect(MONGO, {
+    const connectionOptions = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 30000, // Increased timeout for serverless
-      socketTimeoutMS: 75000,
-      connectTimeoutMS: 60000,
+      serverSelectionTimeoutMS: 20000,
+      socketTimeoutMS: 0,
+      connectTimeoutMS: 20000,
       bufferCommands: false,
       bufferMaxEntries: 0,
-      maxPoolSize: 5, // Reduced pool size for serverless
-      minPoolSize: 0,
+      maxPoolSize: 5,
+      minPoolSize: 1,
       maxIdleTimeMS: 30000,
-      family: 4 // Force IPv4
-    });
+      heartbeatFrequencyMS: 10000
+    };
+
+    console.log('Connecting with options:', JSON.stringify(connectionOptions, null, 2));
+
+    // Connect to MongoDB
+    await mongoose.connect(MONGO, connectionOptions);
+    
+    // Verify the connection works
+    console.log('Pinging database...');
+    await mongoose.connection.db.admin().ping();
     
     isConnected = true;
-    console.log('✅ Successfully connected to MongoDB');
+    console.log('✅ Successfully connected to MongoDB Atlas');
+    console.log('Database name:', mongoose.connection.db.databaseName);
     console.log('Connection state:', mongoose.connection.readyState);
+    
     return true;
   } catch (error) {
-    console.error('❌ Database connection error:', {
-      message: error.message,
-      code: error.code,
-      codeName: error.codeName
-    });
+    console.error('❌ MongoDB connection failed:');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    if (error.codeName) {
+      console.error('Error code name:', error.codeName);
+    }
+    
     isConnected = false;
     return false;
   }
