@@ -488,10 +488,17 @@ app.post('/api/leads', async (req, res) => {
 
     let savedLead = null;
     let leadSource = 'fallback';
+    let connectionStatus = 'not_attempted';
 
-    try {
-      // Try to save to database if connected
-      if (mongoose.connection.readyState === 1) {
+    // Attempt to connect to database
+    console.log('Attempting to connect to database for lead submission...');
+    const dbConnected = await connectToDatabase();
+    
+    if (dbConnected) {
+      connectionStatus = 'connected';
+      try {
+        console.log('Database connected, saving lead...');
+        
         // Check for existing lead
         const existingLead = await Lead.findOne({ 
           $or: [{ email: leadData.email }, { phone: leadData.phone }] 
@@ -507,23 +514,27 @@ app.post('/api/leads', async (req, res) => {
         const lead = new Lead(leadData);
         savedLead = await lead.save();
         leadSource = 'database';
-        console.log('Lead saved to database:', savedLead._id);
-      } else {
-        // Database not connected, simulate save
+        
+        console.log('Lead successfully saved to database:', savedLead._id);
+      } catch (dbError) {
+        console.error('Database save error:', dbError);
+        connectionStatus = 'save_failed';
+        // If database save fails, create mock saved lead
         savedLead = {
           _id: new mongoose.Types.ObjectId().toString(),
           ...leadData
         };
-        console.log('Lead saved to fallback storage (database not available)');
+        leadSource = 'fallback_db_error';
       }
-    } catch (dbError) {
-      console.error('Database error, using fallback:', dbError.message);
-      // If database save fails, create mock saved lead
+    } else {
+      console.log('Database connection failed, using fallback storage');
+      connectionStatus = 'connection_failed';
+      // Database not connected, simulate save
       savedLead = {
         _id: new mongoose.Types.ObjectId().toString(),
         ...leadData
       };
-      leadSource = 'fallback';
+      leadSource = 'fallback_no_connection';
     }
 
     // Send to Pipedream webhook if provided
@@ -533,7 +544,8 @@ app.post('/api/leads', async (req, res) => {
         await axios.post(pipedreamUrl, {
           ...leadData,
           id: savedLead._id,
-          source: leadSource
+          source: leadSource,
+          connectionStatus: connectionStatus
         }, {
           timeout: 5000,
           headers: {
@@ -562,7 +574,8 @@ app.post('/api/leads', async (req, res) => {
         createdAt: savedLead.createdAt
       },
       source: leadSource,
-      message: 'Lead submitted successfully' 
+      connectionStatus: connectionStatus,
+      message: leadSource === 'database' ? 'Lead saved to database successfully' : 'Lead submitted (database unavailable, using fallback)'
     });
 
   } catch (err) {
@@ -593,36 +606,64 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 4000;
 const MONGO = process.env.MONGO_URI;
 
+console.log('Environment check:', {
+  NODE_ENV: process.env.NODE_ENV,
+  MONGO_URI_EXISTS: !!process.env.MONGO_URI,
+  MONGO_URI_PREFIX: process.env.MONGO_URI ? process.env.MONGO_URI.substring(0, 30) + '...' : 'NOT SET'
+});
+
 if (!MONGO) {
-  console.error('MONGO_URI is required');
-  process.exit(1);
+  console.error('MONGO_URI environment variable is not set!');
+  if (process.env.NODE_ENV === 'production') {
+    console.error('Please add MONGO_URI to your Vercel environment variables');
+  }
 }
 
 // Database connection for serverless
 let isConnected = false;
+let connectionAttempts = 0;
+const MAX_CONNECTION_ATTEMPTS = 3;
 
 const connectToDatabase = async () => {
   if (isConnected && mongoose.connection.readyState === 1) {
-    return;
+    return true;
+  }
+
+  if (!MONGO) {
+    console.error('Cannot connect: MONGO_URI not provided');
+    return false;
+  }
+
+  if (connectionAttempts >= MAX_CONNECTION_ATTEMPTS) {
+    console.error('Max connection attempts reached');
+    return false;
   }
 
   try {
+    connectionAttempts++;
+    console.log(`Connection attempt ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}`);
+    
     if (mongoose.connection.readyState === 0) {
       await mongoose.connect(MONGO, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 5000,
+        serverSelectionTimeoutMS: 15000, // Increased timeout
         socketTimeoutMS: 45000,
         bufferCommands: false,
         bufferMaxEntries: 0,
+        maxPoolSize: 10, // Maintain up to 10 socket connections
+        family: 4 // Use IPv4, skip trying IPv6
       });
     }
+    
     isConnected = true;
-    console.log('Connected to MongoDB');
+    connectionAttempts = 0; // Reset on successful connection
+    console.log('Successfully connected to MongoDB');
+    return true;
   } catch (error) {
-    console.error('Database connection error:', error);
+    console.error(`Database connection error (attempt ${connectionAttempts}):`, error.message);
     isConnected = false;
-    throw error;
+    return false;
   }
 };
 
