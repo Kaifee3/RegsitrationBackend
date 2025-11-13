@@ -16,6 +16,28 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const University = require('../models/University');
 const Lead = require('../models/Lead');
 
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'API is working',
+    data: [
+      {
+        _id: '69162423193b92928b7978e0',
+        name: 'Indian Institute of Technology Delhi',
+        shortName: 'IIT Delhi',
+        city: 'New Delhi'
+      },
+      {
+        _id: '69162423193b92928b7978e4',
+        name: 'Lovely Professional University',
+        shortName: 'LPU',
+        city: 'Jalandhar,Punjab'
+      }
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     success: true, 
