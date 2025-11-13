@@ -5,7 +5,6 @@ const cors = require('cors');
 
 const app = express();
 
-// CORS configuration for production
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   credentials: true
@@ -17,7 +16,6 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const University = require('./models/University');
 const Lead = require('./models/Lead');
 
-// Health check endpoint for monitoring
 app.get('/api/health', (req, res) => {
   res.json({ 
     success: true, 
@@ -27,7 +25,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
     success: true, 
@@ -97,7 +94,6 @@ app.post('/api/leads', async (req, res) => {
   try {
     const { fullName, email, phone, state, courseInterested, intakeYear, consent, pipedreamUrl } = req.body;
 
-    // Enhanced validation
     if (!fullName || !email || !phone || !courseInterested || !intakeYear) {
       return res.status(400).json({ 
         success: false, 
@@ -105,18 +101,15 @@ app.post('/api/leads', async (req, res) => {
       });
     }
 
-    // Email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       return res.status(400).json({ success: false, error: 'Invalid email format' });
     }
 
-    // Phone validation (10 digits)
     if (!/^\d{10}$/.test(phone)) {
       return res.status(400).json({ success: false, error: 'Phone must be exactly 10 digits' });
     }
 
-    // Check for duplicate lead
     const existingLead = await Lead.findOne({ email, phone });
     if (existingLead) {
       return res.status(409).json({ 
@@ -137,7 +130,6 @@ app.post('/api/leads', async (req, res) => {
     
     await lead.save();
 
-    // Forward to Pipedream webhook if provided
     if (pipedreamUrl) {
       const axios = require('axios');
       try {
@@ -158,7 +150,7 @@ app.post('/api/leads', async (req, res) => {
         });
       } catch (err) {
         console.warn('Pipedream forward failed:', err.message);
-        // Don't fail the request if webhook fails
+        
       }
     }
 
@@ -183,7 +175,6 @@ app.post('/api/leads', async (req, res) => {
   }
 });
 
-// 404 handler for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({ 
     success: false, 
@@ -192,7 +183,6 @@ app.use('*', (req, res) => {
   });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error('Global error handler:', err);
   res.status(500).json({ 
@@ -209,7 +199,6 @@ if (!MONGO) {
   process.exit(1);
 }
 
-// MongoDB connection with better error handling
 mongoose.connect(MONGO, { 
   useNewUrlParser: true, 
   useUnifiedTopology: true,
@@ -219,16 +208,15 @@ mongoose.connect(MONGO, {
   .then(() => {
     console.log('✅ MongoDB connected successfully');
     app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(` Server running on port ${PORT}`);
+      console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
     });
   })
   .catch(err => {
-    console.error('❌ MongoDB connection error:', err.message);
+    console.error('MongoDB connection error:', err.message);
     process.exit(1);
   });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received. Shutting down gracefully...');
   mongoose.connection.close(false, () => {
