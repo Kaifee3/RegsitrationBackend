@@ -191,16 +191,13 @@ app.get('/api/mongo-test', async (req, res) => {
 
     console.log('MONGO_URI exists, attempting connection...');
     
-    // Use the main mongoose connection instead of creating a new one
+    // Use simplified connection options that work with all Mongoose versions
     if (mongoose.connection.readyState === 0) {
-      // Not connected, try to connect
       console.log('Connecting to MongoDB...');
       await mongoose.connect(process.env.MONGO_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 15000,
-        bufferCommands: false,
-        bufferMaxEntries: 0
+        serverSelectionTimeoutMS: 15000
       });
     }
 
@@ -725,18 +722,13 @@ const connectToDatabase = async () => {
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
+    // Use only supported connection options
     const connectionOptions = {
       useNewUrlParser: true,
       useUnifiedTopology: true,
       serverSelectionTimeoutMS: 20000,
       socketTimeoutMS: 0,
-      connectTimeoutMS: 20000,
-      bufferCommands: false,
-      bufferMaxEntries: 0,
-      maxPoolSize: 5,
-      minPoolSize: 1,
-      maxIdleTimeMS: 30000,
-      heartbeatFrequencyMS: 10000
+      connectTimeoutMS: 20000
     };
 
     console.log('Connecting with options:', JSON.stringify(connectionOptions, null, 2));
