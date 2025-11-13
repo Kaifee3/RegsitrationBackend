@@ -13,15 +13,17 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-const University = require('./models/University');
-const Lead = require('./models/Lead');
+const University = require('../models/University');
+const Lead = require('../models/Lead');
 
 app.get('/api/health', (req, res) => {
   res.json({ 
     success: true, 
     message: 'Server is running',
     timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV || 'development'
+    env: process.env.NODE_ENV || 'development',
+    mongoConfigured: !!process.env.MONGO_URI,
+    mongoPrefix: process.env.MONGO_URI ? process.env.MONGO_URI.substring(0, 20) + '...' : 'Not configured'
   });
 });
 
@@ -188,30 +190,54 @@ const PORT = process.env.PORT || 4000;
 const MONGO = process.env.MONGO_URI;
 
 if (!MONGO) {
+  console.error('MONGO_URI is required');
   process.exit(1);
 }
 
-mongoose.connect(MONGO, { 
-  useNewUrlParser: true, 
-  useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 10000,
-  socketTimeoutMS: 45000,
-})
-  .then(() => {
-    app.listen(PORT, () => {});
-  })
-  .catch(err => {
-    process.exit(1);
-  });
+// Database connection for serverless
+let isConnected = false;
 
-process.on('SIGTERM', () => {
-  mongoose.connection.close(false, () => {
-    process.exit(0);
-  });
+const connectToDatabase = async () => {
+  if (isConnected) {
+    return;
+  }
+
+  try {
+    await mongoose.connect(MONGO, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+      bufferCommands: false,
+      bufferMaxEntries: 0,
+    });
+    isConnected = true;
+    console.log('Connected to MongoDB');
+  } catch (error) {
+    console.error('Database connection error:', error);
+    throw error;
+  }
+};
+
+// Middleware to ensure database connection
+app.use(async (req, res, next) => {
+  try {
+    await connectToDatabase();
+    next();
+  } catch (error) {
+    res.status(500).json({ 
+      success: false, 
+      error: 'Database connection failed' 
+    });
+  }
 });
 
-process.on('SIGINT', () => {
-  mongoose.connection.close(false, () => {
-    process.exit(0);
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
   });
-});
+}
+
+// Export for Vercel
+module.exports = app;
