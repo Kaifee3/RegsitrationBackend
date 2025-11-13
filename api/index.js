@@ -185,43 +185,44 @@ app.get('/api/mongo-test', async (req, res) => {
     if (!process.env.MONGO_URI) {
       return res.json({
         success: false,
-        error: 'MONGO_URI not found',
-        env: Object.keys(process.env).filter(key => key.includes('MONGO'))
+        error: 'MONGO_URI not found'
       });
     }
 
     console.log('MONGO_URI exists, attempting connection...');
     
-    // Test connection with mongoose directly
-    const testConnection = await mongoose.createConnection(process.env.MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 15000,
-      socketTimeoutMS: 0,
-      bufferCommands: false,
-      bufferMaxEntries: 0
-    });
+    // Use the main mongoose connection instead of creating a new one
+    if (mongoose.connection.readyState === 0) {
+      // Not connected, try to connect
+      console.log('Connecting to MongoDB...');
+      await mongoose.connect(process.env.MONGO_URI, {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        serverSelectionTimeoutMS: 15000,
+        bufferCommands: false,
+        bufferMaxEntries: 0
+      });
+    }
 
-    // Test the connection with a ping
+    // Test the connection
     console.log('Testing connection with ping...');
-    await testConnection.db.admin().ping();
+    const adminDb = mongoose.connection.db.admin();
+    const pingResult = await adminDb.ping();
     
-    const dbName = testConnection.db.databaseName;
+    const dbName = mongoose.connection.db.databaseName;
     console.log('Connected to database:', dbName);
     
     // Try to list collections
-    const collections = await testConnection.db.listCollections().toArray();
+    const collections = await mongoose.connection.db.listCollections().toArray();
     console.log('Collections found:', collections.length);
-    
-    // Close test connection
-    await testConnection.close();
-    console.log('Test connection closed');
     
     res.json({
       success: true,
       message: 'MongoDB connection successful!',
       database: dbName,
       collections: collections.map(c => c.name),
+      connectionState: mongoose.connection.readyState,
+      pingResult: pingResult,
       timestamp: new Date().toISOString()
     });
     
@@ -232,6 +233,7 @@ app.get('/api/mongo-test', async (req, res) => {
       error: error.message,
       errorCode: error.code || 'unknown',
       errorName: error.name || 'unknown',
+      connectionState: mongoose.connection.readyState,
       mongoUriConfigured: !!process.env.MONGO_URI
     });
   }
